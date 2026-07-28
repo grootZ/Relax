@@ -1,29 +1,33 @@
 #!/bin/bash
+
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 #
-# Qwen3.5-35B-A3B 8xGPU colocate training script.
+# Qwen3.6-35B-A3B 8xXPU fully sync training script for DAPO math dataset.
 #
 # Usage:
-#   bash scripts/training/multimodal/run-qwen35-35B-A3B-8xklx.sh
+# bash scripts/training/text/run-qwen36-35B-A3B-8xklx.sh
 
 set -ex
 set -o pipefail
 
 now=$(date "+%Y-%m-%d-%H:%M:%S")
 echo "当前时间: $now"
+export HOST_IP=127.0.0.1
 
+export WANDB_API_KEY=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
 export WORKDIR="${WORKDIR:-/workspace}"
 export MODEL_DIR="${MODEL_DIR:-/workspace}"
 export DATA_DIR="${DATA_DIR:-/workspace}"
-export PROJECT_NAME=Relax-Qwen3.5-35B-A3B-VL-P800
+export PROJECT_NAME=Relax-Qwen3.6-35B-A3B
 export WANDB_API_KEY="${WANDB_API_KEY:=YOUR-KEY}"
- 
+
 export MEGATRON=${WORKDIR}/Megatron-LM
- 
+
 export XMLIR_USE_HYDRA_LINEAR=1
 export XMLIR_ENABLE_FAST_FC=1
 export XTE_DISABLE_MOE_DW_FUSION=0
- 
+export USE_CAST_FC_FUSION=1
+
 export RELAX_SKIP_TORCH_MEMORY_SAVER=1
 export XMLIR_MEMCPY_RETRY_SYNC=true
 export CUDA_ENABLE_P2P_NO_UVA=0
@@ -34,6 +38,9 @@ export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-"eth0"}
 export TP_SOCKET_IFNAME=${TP_SOCKET_IFNAME:-"eth0"}
 export BKCL_RDMA_NICS=${BKCL_RDMA_NICS:-"bond0,bond1,bond2,bond3,bond4,bond5,bond6,bond7"}
 
+export RAY_DEDUP_LOGS=0
+export RAY_DEDUP_LOGS_AGG_WINDOW_S=0
+
 unset http_proxy
 unset https_proxy
 
@@ -42,19 +49,27 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 if [ -z "${RELAX_ENTRYPOINT_MODE:-}" ]; then
     source "${SCRIPT_DIR}/../../entrypoint/local-klx.sh"
 fi
-source "${SCRIPT_DIR}/../../models/qwen35-35B-A3B.sh"
+source "${SCRIPT_DIR}/../../models/qwen36-35B-A3B.sh"
 
-NUM_ROLLOUT="${NUM_ROLLOUT:=200}"
+PROJECT_NAME="${PROJECT_NAME:=Relax/dev/dapo-math}"
+EXP_DIR="${EXP_DIR:-${SCRIPT_DIR}/../../../../exps}"
+MODEL_DIR="${MODEL_DIR:-${EXP_DIR}}"
+DATA_DIR="${DATA_DIR:-${EXP_DIR}}"
+NUM_ROLLOUT="${NUM_ROLLOUT:=400}"
 
 CKPT_ARGS=(
-   --hf-checkpoint ${MODEL_DIR}/Qwen3.5-35B-A3B
-   --ref-load ${MODEL_DIR}/Qwen3.5-35B-A3B
+   --hf-checkpoint ${MODEL_DIR}/Qwen3.6-35B-A3B/
+   --ref-load ${MODEL_DIR}/Qwen3.6-35B-A3B/
    --megatron-to-hf-mode bridge
    --warm-hf-checkpoint-page-cache
+
+   # --load ${EXP_DIR}/save/Qwen3.6-35B-A3B_mcore_8xgpu/
+   # --save ${EXP_DIR}/save/Qwen3.6-35B-A3B_mcore_8xgpu/
+   # --save-interval 100
+   # --max-actor-ckpt-to-keep 1
 )
 
-PROMPT_SET=${DATA_DIR}/multimodal-open-r1-8k-verified/data/train-00000-of-00001_converted_noextract.parquet
-SYSTEM_PROMPT="A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>"
+PROMPT_SET=${DATA_DIR}/dapo-math-17k/dapo-math-17k.jsonl
 
 ROLLOUT_ARGS=(
    --prompt-data ${PROMPT_SET}
@@ -62,38 +77,49 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-   --rm-type openr1mm
+   --rm-type dapo
+   --reward-key score
    --num-rollout ${NUM_ROLLOUT}
-   --rollout-batch-size 32
+   --rollout-batch-size 16
    --n-samples-per-prompt 8
-   --rollout-max-response-len 2048
-   --rollout-max-prompt-len 2048
+   --rollout-max-response-len 8192
    --rollout-temperature 1
-   --global-batch-size 256
-   --use-streaming-dataset
-   --balance-data
+   --global-batch-size 128
    --use-fault-tolerance
-   --system-prompt "${SYSTEM_PROMPT}"
-   --multimodal-keys '{"image":"image"}'
-   --no-rope-fusion
+   --balance-data
+)
+
+EVAL_ARGS=(
+   --log-passrate
+   --skip-eval-before-train
+   --eval-interval 20
+   --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
+   --n-samples-per-eval-prompt 8
+   --eval-max-response-len 8192
+   --eval-top-p 0.7
 )
 
 PERF_ARGS=(
+   --decoder-first-pipeline-num-layers 24
    --tensor-model-parallel-size 1
    --sequence-parallel
    --pipeline-model-parallel-size 2
-   --calculate-per-token-loss
    --context-parallel-size 1
+   --calculate-per-token-loss
    --expert-model-parallel-size 4
    --expert-tensor-parallel-size 1
+
    --recompute-granularity full
    --recompute-method uniform
    --recompute-num-layers 1
+
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 8192
+   --max-tokens-per-gpu 4096
    --moe-flex-dispatcher-backend deepep
    --moe-token-dispatcher-type flex
    --moe-grouped-gemm true
+   # --moe-permute-fusion true
+   # --optimizer-offload-fraction 0.5
 )
 
 GRPO_ARGS=(
@@ -120,14 +146,12 @@ OPTIMIZER_ARGS=(
    --use-precision-aware-optimizer
 
    # NOTE(wuhuan): to avoid algorithm performance degradation
+   --no-rope-fusion
    --moe-router-load-balancing-type "none"
    --moe-aux-loss-coeff 0.0
-
-   # --fp16 # Qwen3.5 does not support fp16 training for now
-   --use-rollout-routing-replay
-   --use-slime-router
 )
 
+# 昆仑 XPU 专用 SGLang 参数 + 35B 推理 TP=2
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 4
    --sglang-mem-fraction-static 0.7
@@ -139,16 +163,17 @@ SGLANG_ARGS=(
    # --sglang-disable-cuda-graph
    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
    --sglang-router-policy round_robin
-
-   --sglang-mm-attention-backend fa3
-   --sglang-mm-enable-dp-encoder
 )
 
 WANDB_ARGS=(
-   --tb-experiment-name qwen3.5-35B-klx-${now}
+   # --use-clearml
+   # --use-metrics-service
+   # --tb-project-name  ${PROJECT_NAME}
+   # --tb-experiment-name relax-qwen35-35B-A3B-p800x8-sync-${now}
+   --tb-experiment-name qwen3.6-35B-p800x8-fl-cp1-${now}
    --use-wandb
    --wandb-project ${PROJECT_NAME}
-   --wandb-group qwen3.5-35B-klx-${now}
+   --wandb-group p800x8-fl-4ktp1pp2ep4-${now}
    --wandb-key ${WANDB_API_KEY}
    --disable-wandb-random-suffix
    --no-use-metrics-service
@@ -163,7 +188,18 @@ MISC_ARGS=(
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
    --attention-backend flash
+   # --debug-rollout-only
+   # --save-debug-rollout-data /workdir/debug_rollout/{rollout_id}.pt
+   # --debug-train-only
+   # --load-debug-rollout-data /workdir/debug_rollout/{rollout_id}.pt
 )
+
+# PARTIAL_ROLLOUT_ARGS=(
+#     --partial-rollout
+#     --over-sampling-batch-size 48
+#     --mask-offpolicy-in-partial-rollout
+#     --partial-rollout-max-aborted-count 3
+# )
 
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
@@ -189,16 +225,17 @@ RUNTIME_ENV_JSON="{
     \"XPU_VISIBLE_DEVICES\": \"0,1,2,3,4,5,6,7\",
     \"XMLIR_FA_GEMM_TYPE\": \"float\",
     \"XBLAS_FC_HBM_VERSION\": \"40\",
-    \"XMLIR_ENABLE_FAST_FC\": \"1\",
-    \"XMLIR_USE_HYDRA_LINEAR\": \"1\",
-    \"XTE_DISABLE_MOE_DW_FUSION\": \"0\",
+    \"XMLIR_USE_HYDRA_LINEAR\": \"${XMLIR_USE_HYDRA_LINEAR}\",
+    \"XTE_DISABLE_MOE_DW_FUSION\": \"${XTE_DISABLE_MOE_DW_FUSION}\",
+    \"XMLIR_ENABLE_FAST_FC\": \"${XMLIR_ENABLE_FAST_FC}\",
+    \"USE_CAST_FC_FUSION\": \"${USE_CAST_FC_FUSION}\",
     \"XMLIR_PARALLEL_SAVE_MEMORY\": \"false\",
     \"XMLIR_DISABLE_CUDA_ALLOCATOR\": \"false\",
     \"XMLIR_XDNN_PYTORCH_CHECK_ENABLE_FALLBACK_BOOL\": \"0\",
     \"XMLIR_ENABLE_FALLBACK_TO_CPU_BOOL\": \"False\",
     \"XMLIR_DUMP_FALLBACK_OP_LIST_BOOL\": \"true\",
     \"XMLIR_DIST_ASYNC_ISEND_IRECV\": \"false\",
-    \"XMLIR_BATCH_PARALLEL\": \"false\",
+    \"XMLIR_BATCH_PARALLEL\": \"0\",
     \"XPU_FORCE_SHARED_DEVICE_CONTEXT\": \"1\",
     \"BKCL_RDMA_PROXY_DISABLE\": \"1\",
     \"BKCL_USE_AR\": \"1\",
@@ -256,6 +293,10 @@ RUNTIME_ENV_JSON="{
     \"XSGL_MOE_UNSTABLE_TOPK\": \"1\",
     \"XPU_FLASH_ATTENTION_DECODER_USE_BALANCE\": \"1\",
     \"XMLIR_FORCE_USE_XPU_GRAPH\": \"1\",
+    \"FLASH_TMS_OPT_STATES_INIT\": \"none\",
+    \"FLASH_TMS_CHUNK_SIZE_MB\": \"256\",
+    \"FLASH_TMS_USE_SEPARATE_STREAM\": \"1\",
+    \"SLIME_LAYER_SNAPSHOT\": \"0\",
     \"RAY_OVERRIDE_JOB_RUNTIME_ENV\":\"1\",
     \"RELAX_SKIP_TORCH_MEMORY_SAVER\": \"1\",
     \"XMLIR_MEMCPY_RETRY_SYNC\": \"${XMLIR_MEMCPY_RETRY_SYNC}\",
@@ -264,25 +305,20 @@ RUNTIME_ENV_JSON="{
     \"TP_SOCKET_IFNAME\": \"${TP_SOCKET_IFNAME}\",
     \"NVTE_DEBUG\": \"1\",
     \"NVTE_DEBUG_LEVEL\": \"1\",
-    \"HEALTH_GENERATE_TOPK\": \"-1\",
-    \"WANDB_CONSOLE\": \"off\",
-    \"WANDB_DISABLE_CODE\": \"true\",
-    \"WANDB_DISABLE_GIT\": \"true\",
-    \"WANDB_SILENT\": \"true\"
-  }
+    \"XMLIR_ENABLE_H2D_SSE_COPY\": \"1\",
+    \"HEALTH_GENERATE_TOPK\": \"-1\"
+   }
 }"
 
-    
-
 mkdir -p log
-
-ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://127.0.0.1:8265" \
+ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://${HOST_IP}:8265" \
    ${WORKING_DIR:+--working-dir "${WORKING_DIR}"} \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 -m relax.entrypoints.train \
-   --resource '{"actor": [1, 8], "rollout": [1, 8]}'\
+   --resource '{"actor": [1, 8], "rollout": [1, 8]}' \
    --max-staleness 0 \
    --num-data-storage-units 1 \
+   --use-health-check \
    --colocate \
    "${MODEL_ARGS[@]}" \
    "${CKPT_ARGS[@]}" \
@@ -291,5 +327,6 @@ ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://127.0.0.1:8265" \
    "${GRPO_ARGS[@]}" \
    "${WANDB_ARGS[@]}" \
    "${PERF_ARGS[@]}" \
+   "${EVAL_ARGS[@]}" \
    "${SGLANG_ARGS[@]}" \
-   "${MISC_ARGS[@]}"  2>&1 | tee log/qwen35-35B-A3B-GRPO-gpu8-${now}.log
+   "${MISC_ARGS[@]}"  2>&1 | tee log/qwen36-35B-A3B-GRPO-xpu8-sync-${now}.log
