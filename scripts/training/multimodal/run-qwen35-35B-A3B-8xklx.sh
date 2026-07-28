@@ -264,7 +264,11 @@ RUNTIME_ENV_JSON="{
     \"TP_SOCKET_IFNAME\": \"${TP_SOCKET_IFNAME}\",
     \"NVTE_DEBUG\": \"1\",
     \"NVTE_DEBUG_LEVEL\": \"1\",
-    \"HEALTH_GENERATE_TOPK\": \"-1\"
+    \"HEALTH_GENERATE_TOPK\": \"-1\",
+    \"WANDB_CONSOLE\": \"off\",
+    \"WANDB_DISABLE_CODE\": \"true\",
+    \"WANDB_DISABLE_GIT\": \"true\",
+    \"WANDB_SILENT\": \"true\"
   }
 }"
 
