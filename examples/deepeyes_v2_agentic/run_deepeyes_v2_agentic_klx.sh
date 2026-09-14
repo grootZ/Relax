@@ -9,7 +9,9 @@ echo "当前时间: $now"
 ###############################################################################
 #                                 klx args                                    #
 ###############################################################################
+set +x
 export WANDB_API_KEY="${WANDB_API_KEY:=YOUR-KEY}"
+set -x
 export WORKDIR="${WORKDIR:-/workspace}"
 export MODEL_DIR="${MODEL_DIR:-/workspace/deepeyes}"
 export DATA_DIR="${DATA_DIR:-/workspace/deepeyes}"
@@ -86,6 +88,12 @@ if [ ! -f "${APPTAINER_IMAGE_PATH}" ]; then
     echo "Run: DATA_DIR=${DATA_DIR} bash ${SCRIPT_DIR}/scripts/prepare.sh"
     exit 1
 fi
+DEEPEYES_V2_APP_PYTHON="${DEEPEYES_V2_APP_ENV_ROOT:-/tmp/deepeyes-v2-app-env}/.venv/bin/python"
+if [ ! -x "${DEEPEYES_V2_APP_PYTHON}" ]; then
+    echo "ERROR: DeepEyes V2 app environment not found at ${DEEPEYES_V2_APP_PYTHON}."
+    echo "Run: bash ${SCRIPT_DIR}/scripts/prepare_app_env.sh"
+    exit 1
+fi
 
 ###############################################################################
 #                              JUDGE MODEL API                                #
@@ -125,7 +133,7 @@ PROMPT_SET="[$(IFS=,; echo "${TRAIN_FILES[*]}")]"
 #                               ROLLOUT CONFIG                                #
 ###############################################################################
 
-NUM_ROLLOUT="${NUM_ROLLOUT:=200}"
+NUM_ROLLOUT="${NUM_ROLLOUT:=2000}"
 
 # Sandbox env vars propagated into every Ray worker so the per-session
 # agent process can find apptainer / search cache.
@@ -134,6 +142,7 @@ NUM_ROLLOUT="${NUM_ROLLOUT:=200}"
 EXTRA_ENV_VARS_JSON="\"SANDBOX_BACKEND\": \"apptainer_jupyter\",
     \"SANDBOX_CONFIG_PATH\": \"${SCRIPT_DIR}/apptainer_env/apptainer_config.yaml\",
     \"APPTAINER_IMAGE_PATH\": \"${APPTAINER_IMAGE_PATH}\",
+    \"DEEPEYES_V2_APP_PYTHON\": \"${DEEPEYES_V2_APP_PYTHON}\",
     \"DEEPEYES_V2_SEARCH_CACHE_PATHS\": \"${DEEPEYES_V2_SEARCH_CACHE_PATHS:-}\",
     \"DEEPEYES_JUDGE_BASE_URL\": \"${DEEPEYES_JUDGE_BASE_URL:-}\",
     \"DEEPEYES_JUDGE_MODELS\": \"${DEEPEYES_JUDGE_MODELS:-}\",
@@ -187,7 +196,7 @@ EVAL_ARGS=(
     --n-samples-per-eval-prompt 8
     --eval-max-response-len 4096
     --eval-top-p 0.7
-    --agentic-eval-prepare-pool-size 32
+    --agentic-eval-concurrency ${AGENTIC_EVAL_CONCURRENCY:-128}
 )
 
 ###############################################################################
@@ -251,7 +260,6 @@ LOG_ARGS=(
     --use-wandb
     --wandb-project ${PROJECT_NAME}
     --wandb-group deepeyes_v2_agentic-klx-${now}
-    --wandb-key ${WANDB_API_KEY}
     --disable-wandb-random-suffix
     --no-use-metrics-service
 )
@@ -301,6 +309,28 @@ RAY_RESOURCE_ARGS=(
 
 mkdir -p logs
 
+# xtrace off for the submit command: --runtime-env-json embeds EXTRA_ENV_VARS_JSON
+# (may carry DEEPEYES_JUDGE_API_KEY etc.) and, after the merge below, WANDB_API_KEY;
+# the whole line would otherwise be echoed by `set -x` into logs/${EXP_NAME}.log.
+set +x
+# Merge WANDB_API_KEY into the job runtime_env. `ray job submit` runs the entrypoint
+# on the (possibly pre-existing) cluster, whose workers do NOT inherit this submit
+# shell's exports — so wandb online init can't authenticate unless the key travels
+# via runtime_env. Read from os.environ (no shell interpolation) and keep xtrace off
+# so the value never hits the log. NOTE: the key still lands in Ray's job runtime_env
+# metadata (dashboard / `ray job list`); use a cluster-preset env or `wandb login`
+# (~/.netrc) instead if that surface is unacceptable.
+if [ -n "${WANDB_API_KEY}" ] && [ "${WANDB_API_KEY}" != "YOUR-KEY" ]; then
+    RUNTIME_ENV_JSON=$(python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["RUNTIME_ENV_JSON"])
+payload.setdefault("env_vars", {})["WANDB_API_KEY"] = os.environ["WANDB_API_KEY"]
+print(json.dumps(payload))
+PY
+)
+fi
 ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://127.0.0.1:8265" \
     --runtime-env-json "${RUNTIME_ENV_JSON}" \
     -- python3 relax/entrypoints/train.py \
@@ -316,3 +346,4 @@ ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://127.0.0.1:8265" \
     "${MEGATRON_ARGS[@]}" \
     "${EVAL_ARGS[@]}" \
     2>&1 | tee logs/${EXP_NAME}.log
+set -x
