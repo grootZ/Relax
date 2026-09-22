@@ -41,6 +41,8 @@ fi
 echo "[cpu-threads] NUM_GPUS_TOTAL=${NUM_GPUS_TOTAL} CPU_THREADS_PER_ACTOR=${CPU_THREADS_PER_ACTOR}"
 export CPU_THREADS_PER_ACTOR
 
+# /data1/zhujinlei/fix_err7/xhpc-ubuntu2004_x86_64/xblas/so:
+
 export RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"${WORKDIR}/TransferQueue:${WORKDIR}/Megatron-LM/:${SCRIPT_DIR}:${WORKDIR}/Megatron-Bridge/src/:$PYTHONPATH\",
@@ -130,6 +132,7 @@ export RUNTIME_ENV_JSON="{
     \"XSGL_TRANSPOSE_CONV_STATE\": \"1\",
     \"XSGL_FUSE_SPLIT_NORM_ROPE_NEOX\": \"1\",
     \"XSGL_MOE_UNSTABLE_TOPK\": \"${XSGL_MOE_UNSTABLE_TOPK:-1}\",
+    \"XSGL_QUANT_ALL_GATHER\": \"${XSGL_QUANT_ALL_GATHER:-0}\",
     \"XPU_FLASH_ATTENTION_DECODER_USE_BALANCE\": \"1\",
     \"XMLIR_FORCE_USE_XPU_GRAPH\": \"1\",
     \"RAY_OVERRIDE_JOB_RUNTIME_ENV\":\"1\",

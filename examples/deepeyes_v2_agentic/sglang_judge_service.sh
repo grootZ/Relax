@@ -43,6 +43,8 @@ python -m sglang.launch_server \
     --api-key "EMPTY" \
     --mem-fraction-static 0.05 \
     --disable-cuda-graph \
+    --attention-backend kunlun \
+    --max-running-requests 32 \
     > "$LOG_FILE" 2>&1 &
 
 SGLANG_JUDGE_PID=$!

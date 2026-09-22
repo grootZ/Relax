@@ -3,6 +3,35 @@
 
 set -ex
 set -o pipefail
+now=$(date "+%Y-%m-%d-%H:%M:%S")
+echo "当前时间: $now"
+
+###############################################################################
+#                                 klx args                                    #
+###############################################################################
+export WANDB_API_KEY=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
+export WORKDIR="${WORKDIR:-/workspace}"
+export MODEL_DIR="${MODEL_DIR:-/data1/zhujinlei/deepeyes}"
+export DATA_DIR="${DATA_DIR:-/data1/zhujinlei/deepeyes}"
+export SAVE_DIR="${SAVE_DIR:-/data1/zhujinlei/deepeyes}"
+export PROJECT_NAME=deepeyes_v2_agentic
+ 
+export MEGATRON=${WORKDIR}/Megatron-LM
+
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export RL_MODEL_TYPE="Qwen36_35B_multimodal"
+export XMLIR_USE_HYDRA_LINEAR=${XMLIR_USE_HYDRA_LINEAR:-1}
+export XMLIR_ENABLE_FAST_FC=${XMLIR_ENABLE_FAST_FC:-1}
+export XMLIR_MATMUL_FAST_MODE=${XMLIR_MATMUL_FAST_MODE:-1}
+export XMLIR_MEMCPY_RETRY_SYNC=${XMLIR_MEMCPY_RETRY_SYNC:-true}
+
+export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-eth0}
+export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-eth0}
+export TP_SOCKET_IFNAME=${TP_SOCKET_IFNAME:-eth0}
+export BKCL_RDMA_NICS=${BKCL_RDMA_NICS:-bond0,bond1,bond2,bond3,bond4,bond5,bond6,bond7}
+
+unset http_proxy
+unset https_proxy
 
 ###############################################################################
 #                                 ENVIRONMENT                                 #
@@ -72,10 +101,10 @@ CKPT_ARGS=(
     --hf-checkpoint ${MODEL_DIR}/Qwen3.6-35B-A3B
     --ref-load ${MODEL_DIR}/Qwen3.6-35B-A3B
     --warm-hf-checkpoint-page-cache
-    --save ${SAVE_DIR}/Qwen3.6-35B-A3B-Checkpoint_v2
+    # --save ${SAVE_DIR}/Qwen3.6-35B-A3B-Checkpoint_v2
     --megatron-to-hf-mode bridge
-    --save-interval 200
-    --max-actor-ckpt-to-keep 1
+    # --save-interval 200
+    # --max-actor-ckpt-to-keep 1
 )
 
 ###############################################################################
@@ -96,26 +125,22 @@ PROMPT_SET="[$(IFS=,; echo "${TRAIN_FILES[*]}")]"
 #                               ROLLOUT CONFIG                                #
 ###############################################################################
 
-NUM_ROLLOUT="${NUM_ROLLOUT:=2000}"
+NUM_ROLLOUT="${NUM_ROLLOUT:=200}"
 
 # Sandbox env vars propagated into every Ray worker so the per-session
 # agent process can find apptainer / search cache.
 # SANDBOX_CONFIG_PATH is required — the agent reads it in _build_executor
 # to find the apptainer backend YAML config (image path, bind paths, etc).
-RUNTIME_ENV_JSON=$(cat <<EOF
-{
-  "env_vars": {
-    "SANDBOX_BACKEND": "apptainer_jupyter",
-    "SANDBOX_CONFIG_PATH": "${SCRIPT_DIR}/apptainer_env/apptainer_config.yaml",
-    "DEEPEYES_V2_SEARCH_CACHE_PATHS": "${DEEPEYES_V2_SEARCH_CACHE_PATHS:-}",
-    "DEEPEYES_JUDGE_BASE_URL": "${DEEPEYES_JUDGE_BASE_URL:-}",
-    "DEEPEYES_JUDGE_MODELS": "${DEEPEYES_JUDGE_MODELS:-}",
-    "DEEPEYES_JUDGE_API_KEY": "${DEEPEYES_JUDGE_API_KEY:-}",
-    "APPTAINER_IMAGE_PATH": "${APPTAINER_IMAGE_PATH:-}"
-  }
-}
-EOF
-)
+EXTRA_ENV_VARS_JSON="\"SANDBOX_BACKEND\": \"apptainer_jupyter\",
+    \"SANDBOX_CONFIG_PATH\": \"${SCRIPT_DIR}/apptainer_env/apptainer_config.yaml\",
+    \"APPTAINER_IMAGE_PATH\": \"${APPTAINER_IMAGE_PATH}\",
+    \"DEEPEYES_V2_SEARCH_CACHE_PATHS\": \"${DEEPEYES_V2_SEARCH_CACHE_PATHS:-}\",
+    \"DEEPEYES_JUDGE_BASE_URL\": \"${DEEPEYES_JUDGE_BASE_URL:-}\",
+    \"DEEPEYES_JUDGE_MODELS\": \"${DEEPEYES_JUDGE_MODELS:-}\",
+    \"DEEPEYES_JUDGE_API_KEY\": \"${DEEPEYES_JUDGE_API_KEY:-}\",
+    \"XMLIR_ENABLE_H2D_SSE_COPY\": \"${XMLIR_ENABLE_H2D_SSE_COPY:-1}\",
+    \"USE_CAST_FC_FUSION\": \"${USE_CAST_FC_FUSION:-1}\""
+source "${SCRIPT_DIR}/../../scripts/entrypoint/runtime-env-klx.sh"
 
 ROLLOUT_ARGS=(
     --prompt-data "${PROMPT_SET}"
@@ -203,8 +228,18 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
     --rollout-num-gpus-per-engine 2
-    --sglang-mem-fraction-static 0.8
-    --sglang-mamba-scheduler-strategy extra_buffer
+    --sglang-mem-fraction-static 0.7
+    --sglang-disable-custom-all-reduce
+    --sglang-page-size 64
+    --sglang-attention-backend kunlun
+    --sglang-disable-radix-cache
+    --sglang-max-running-requests 256
+    # --sglang-disable-cuda-graph
+    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
+    --sglang-router-policy round_robin
+
+    --sglang-mm-attention-backend fa3
+    --sglang-mm-enable-dp-encoder
 )
 
 ###############################################################################
@@ -212,10 +247,13 @@ SGLANG_ARGS=(
 ###############################################################################
 
 LOG_ARGS=(
-    --use-clearml
-    --use-metrics-service
-    --tb-project-name ${PROJECT_NAME}
-    --tb-experiment-name ${EXP_NAME}
+    --tb-experiment-name deepeyes_v2_agentic-klx-${now}
+    --use-wandb
+    --wandb-project ${PROJECT_NAME}
+    --wandb-group deepeyes_v2_agentic-p800-${now}
+    --wandb-key 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
+    --disable-wandb-random-suffix
+    --no-use-metrics-service
 )
 
 ###############################################################################
@@ -229,6 +267,7 @@ MEGATRON_ARGS=(
     --context-parallel-size 1
     --expert-model-parallel-size 8
     --expert-tensor-parallel-size 1
+
     --recompute-granularity full
     --recompute-method uniform
     --recompute-num-layers 1
@@ -239,6 +278,12 @@ MEGATRON_ARGS=(
     --attention-softmax-in-fp32
     --attention-backend flash
     --use-dynamic-batch-size
+
+    --moe-flex-dispatcher-backend deepep
+    --moe-token-dispatcher-type flex
+    --moe-grouped-gemm true
+    # --debug-train-only
+    # --load-debug-rollout-data /workspace/rollout_data/{rollout_id}.pt
 )
 
 ###############################################################################
@@ -262,6 +307,7 @@ mkdir -p logs
 ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://127.0.0.1:8265" \
     --runtime-env-json "${RUNTIME_ENV_JSON}" \
     -- python3 relax/entrypoints/train.py \
+    --selective-offload \
     "${RAY_RESOURCE_ARGS[@]}" \
     "${MODEL_ARGS[@]}" \
     "${CKPT_ARGS[@]}" \
