@@ -10,12 +10,12 @@ echo "当前时间: $now"
 #                                 klx args                                    #
 ###############################################################################
 set +x
-export WANDB_API_KEY="${WANDB_API_KEY:=YOUR-KEY}"
+export WANDB_API_KEY=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
 set -x
-export WORKDIR="${WORKDIR:-/workspace}"
-export MODEL_DIR="${MODEL_DIR:-/workspace/deepeyes}"
-export DATA_DIR="${DATA_DIR:-/workspace/deepeyes}"
-export SAVE_DIR="${SAVE_DIR:-/workspace/deepeyes}"
+export WORKDIR="${WORKDIR:-/data1/zhujinlei/Gitee}"
+export MODEL_DIR="${MODEL_DIR:-/data1/zhujinlei/deepeyes}"
+export DATA_DIR="${DATA_DIR:-/data1/zhujinlei/deepeyes}"
+export SAVE_DIR="${SAVE_DIR:-/data1/zhujinlei/deepeyes}"
 export PROJECT_NAME=deepeyes_v2_agentic
  
 export MEGATRON=${WORKDIR}/Megatron-LM
@@ -133,7 +133,7 @@ PROMPT_SET="[$(IFS=,; echo "${TRAIN_FILES[*]}")]"
 #                               ROLLOUT CONFIG                                #
 ###############################################################################
 
-NUM_ROLLOUT="${NUM_ROLLOUT:=2000}"
+NUM_ROLLOUT="${NUM_ROLLOUT:=200}"
 
 # Sandbox env vars propagated into every Ray worker so the per-session
 # agent process can find apptainer / search cache.
@@ -259,7 +259,7 @@ LOG_ARGS=(
     --tb-experiment-name deepeyes_v2_agentic-klx-${now}
     --use-wandb
     --wandb-project ${PROJECT_NAME}
-    --wandb-group deepeyes_v2_agentic-klx-${now}
+    --wandb-group deepeyes_v2_agentic-klx-tms-${now}
     --disable-wandb-random-suffix
     --no-use-metrics-service
 )
@@ -331,10 +331,10 @@ print(json.dumps(payload))
 PY
 )
 fi
+    # --selective-offload \
 ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://127.0.0.1:8265" \
     --runtime-env-json "${RUNTIME_ENV_JSON}" \
     -- python3 relax/entrypoints/train.py \
-    --selective-offload \
     "${RAY_RESOURCE_ARGS[@]}" \
     "${MODEL_ARGS[@]}" \
     "${CKPT_ARGS[@]}" \

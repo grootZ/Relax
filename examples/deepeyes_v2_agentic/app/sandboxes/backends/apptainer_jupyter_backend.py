@@ -323,6 +323,7 @@ class ApptainerJupyterBackend(BaseSandbox):
                     stdout=stdout_fh,
                     stderr=stderr_fh,
                     stdin=asyncio.subprocess.DEVNULL,
+                    start_new_session=True, ## jinlei
                 )
             finally:
                 stderr_fh.close()
