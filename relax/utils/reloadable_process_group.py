@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 from contextlib import contextmanager
 from datetime import timedelta
@@ -127,6 +128,31 @@ def monkey_patch_torch_dist(args=None):
         return new_function
 
     dist.P2POp.__new__ = get_new_p2pop_function(dist.P2POp.__new__)
+
+    # Megatron binds these two collectives at *import* time, e.g.
+    # `tensor_parallel/mappings.py`: `dist_all_gather_func =
+    # torch.distributed.all_gather_into_tensor`. Modules imported before this
+    # patch therefore keep the pre-patch originals and hand
+    # ReloadableProcessGroup straight to the C++ layer, which fails with
+    # "No backend type associated with device type cuda". Rebind every such
+    # alias to the wrapped version so it unwraps `.group` at call time -- that
+    # also keeps it correct across destroy/reload, which swaps the inner group.
+    # Modules imported *after* this point pick up the wrapped functions on
+    # their own, so only sys.modules needs sweeping.
+    _alias_targets = {
+        "dist_all_gather_func": dist.all_gather_into_tensor,
+        "dist_reduce_scatter_func": dist.reduce_scatter_tensor,
+    }
+    rebound = 0
+    for module in list(sys.modules.values()):
+        if module is None or not getattr(module, "__name__", "").startswith("megatron."):
+            continue
+        for alias, patched in _alias_targets.items():
+            if hasattr(module, alias) and getattr(module, alias) is not patched:
+                setattr(module, alias, patched)
+                rebound += 1
+    logger.info(f"Rebound {rebound} megatron import-time collective aliases to the wrapped versions")
+
     dist.P2POp.__init__ = get_new_p2pop_function(dist.P2POp.__init__)
 
 

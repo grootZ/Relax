@@ -45,8 +45,13 @@ RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation --no
 #   - fast-hadamard-transform: required by the Lightning Indexer (dsa.rotate_activation asserts on it)
 #   - FlashMLA: fused DSA sparse attention; without it the CSA backward is quadratic in seq len
 #     (mcore only allows the fusion on SM90 when dsa_indexer_loss_coeff == 0)
+# Only DSA models (DeepSeek-V4 / GLM-MoE-DSA) need these; pass --build-arg ENABLE_DSA_DEPS=0 to skip.
+# FlashMLA also compiles sm_100f kernels, which this pin only supports on NVCC 12.9/CUDA 12.x — on a
+# CUDA 13 base the sm100 translation units fail, and `FLASH_MLA_DISABLE_SM100=1` restricts it to sm90.
+ARG ENABLE_DSA_DEPS=1
 ARG FLASH_MLA_COMMIT=b7643bd54521f563b839b98289b5cd048c062ba2
-RUN MAX_JOBS=64 pip install --no-cache-dir --no-build-isolation --no-deps \
+RUN if [ "$ENABLE_DSA_DEPS" = "1" ]; then \
+    MAX_JOBS=64 pip install --no-cache-dir --no-build-isolation --no-deps \
         git+https://github.com/Dao-AILab/fast-hadamard-transform.git@f134af63deb2df17e1171a9ec1ea4a7d8604d5ca && \
     git clone --recurse-submodules https://github.com/deepseek-ai/FlashMLA.git /opt/FlashMLA && \
     cd /opt/FlashMLA && git checkout ${FLASH_MLA_COMMIT} && \
@@ -54,7 +59,8 @@ RUN MAX_JOBS=64 pip install --no-cache-dir --no-build-isolation --no-deps \
     MAX_JOBS=64 pip install --no-cache-dir --no-build-isolation --no-deps . && \
     cd / && python -c "import flash_mla; assert hasattr(flash_mla, 'flash_mla_sparse_fwd'), \
         'flash_mla built but flash_mla_sparse_fwd missing'" && \
-    rm -rf /opt/FlashMLA
+    rm -rf /opt/FlashMLA; \
+fi
 
 # FA3 (Hopper flash-attention), built from source. This commit's _flash_attn_forward carries
 # window_size_left/right to match TE 2.14.1 (docs/draft/sglang-0.5.12-upgrade-plan.md §8.4).
@@ -82,16 +88,30 @@ RUN MAX_JOBS=64 \
     cd / && python -c "import importlib.util as u; assert u.find_spec('flash_attn_interface') is None, 'stray top-level flash_attn_interface still importable'; import flash_attn_config" && \
     rm -rf /opt/flash-attention/
 
+# cuDNN wheel must match the base image's CUDA major. The default matches the cu129
+# baseline; for a cu13x base pass `--build-arg CUDNN_PKG=` (empty) so that torch's own
+# nvidia-cudnn-cu13 pin stands — pinning a cu12 wheel there silently breaks TE.
+ARG CUDNN_PKG="nvidia-cudnn-cu12==9.16.0.29"
 RUN pip -v install --no-cache-dir --no-build-isolation "transformer_engine[pytorch]==2.14.1" && \
     TMS_CUDA_MAJOR=$(python -c 'import torch; print(torch.version.cuda.split(".")[0])') pip install git+https://github.com/redai-studio/torch_memory_saver.git@afc13785c50119048e2dd8ac497cc9e29ec75bd4 --no-cache-dir --force-reinstall && \
     pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation --no-cache-dir && \
     pip install megatron-energon fsspec==2024.3.1 --no-cache-dir&& \
-    pip install "numpy<2" nvidia-cudnn-cu12==9.16.0.29 --no-cache-dir && \
+    pip install "numpy<2" ${CUDNN_PKG} --no-cache-dir
+
+# apex: fetched as a codeload tarball instead of `pip install git+https://...`. The repo is large
+# enough that the git-over-CONNECT-proxy session dies mid-clone (gnutls_handshake "The TLS
+# connection was non-properly terminated"), while a plain HTTPS download of the same commit is
+# stable. Kept in its own layer so a failure here does not re-download the 259 MB TE wheels.
+ARG APEX_COMMIT=10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4
+RUN curl -fsSL -o /tmp/apex.tgz "https://codeload.github.com/NVIDIA/apex/tar.gz/${APEX_COMMIT}" && \
+    mkdir -p /opt/apex && tar xzf /tmp/apex.tgz -C /opt/apex --strip-components=1 && rm -f /tmp/apex.tgz && \
     NVCC_APPEND_FLAGS="--threads 32" \
     pip -v install --disable-pip-version-check --no-cache-dir \
     --no-build-isolation \
     --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" \
-    git+https://github.com/NVIDIA/apex.git@10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4
+    /opt/apex && \
+    cd / && python -c "import torch; import fused_weight_gradient_mlp_cuda, amp_C, apex_C, fused_layer_norm_cuda; print('apex ext OK')" && \
+    rm -rf /opt/apex
 
 WORKDIR /root
 
@@ -121,11 +141,17 @@ RUN rm -rf /root/Megatron-LM && git clone https://github.com/NVIDIA-NeMo/Megatro
     rsync -avP /root/Megatron-Bridge/3rdparty/Megatron-LM/megatron/ /root/Megatron-LM/megatron/ && \
     rm -rf /root/Megatron-Bridge
 
-RUN wget -q https://github.com/apptainer/apptainer/releases/download/v1.4.1/apptainer_1.4.1_amd64.deb \
+# apptainer: only used by the agentic sandbox recipes (examples/nemo_gym_agentic, deepeyes_v2,
+# mini-swe-agent); pass --build-arg ENABLE_APPTAINER=0 to skip it. `-nv` replaces `-q` so a failed
+# download says why — a bare `wget -q` just exits 4 with no message when the network flaps.
+ARG ENABLE_APPTAINER=1
+RUN if [ "$ENABLE_APPTAINER" = "1" ]; then \
+    wget -nv --tries=3 --timeout=30 --retry-connrefused https://github.com/apptainer/apptainer/releases/download/v1.4.1/apptainer_1.4.1_amd64.deb \
     && apt-get update \
     && apt-get install -y --no-install-recommends ./apptainer_1.4.1_amd64.deb \
     && rm apptainer_1.4.1_amd64.deb \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*; \
+fi
 
 COPY requirements.txt /tmp/requirements.txt
 
@@ -143,6 +169,18 @@ RUN pip install --ignore-installed PyJWT && \
 RUN pip install --no-cache-dir --force-reinstall --no-deps \
         https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl && \
     python -c "import sglang_router; assert 'slime' in sglang_router.__version__, sglang_router.__version__"
+
+# Qwen3.8 Flash-Next source overlay (docker/patch/qwen38-flash-next-ple-offload-20260924)
+# pins transformers at commit fc5c5bde (5.16.0.dev0), whose dependency table requires
+# tokenizers>=0.23.1,<0.24.0, while the sglang wheel pins tokenizers==0.22.2. The overlay
+# sits first on PYTHONPATH and wins at runtime, so the newer tokenizers must be installed
+# with --no-deps to avoid dragging transformers/torch along. Off by default:
+#   --build-arg QWEN38_TOKENIZERS="tokenizers>=0.23.1,<0.24"
+ARG QWEN38_TOKENIZERS=""
+RUN if [ -n "${QWEN38_TOKENIZERS}" ]; then \
+    pip install --no-cache-dir --no-deps "${QWEN38_TOKENIZERS}" && \
+    python -c "import tokenizers; print('tokenizers', tokenizers.__version__)"; \
+fi
 
 
 COPY docker/patch/${PATCH_VERSION}/megatron.patch /root/Megatron-LM/

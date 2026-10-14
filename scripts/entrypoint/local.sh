@@ -34,12 +34,12 @@ source "${_LOCAL_SH_DIR}/kernel-cache.sh"
 # When RAY_ADDRESS is set AND `ray status` succeeds, we're already part of an
 # externally-managed Ray cluster. Skip local Ray startup / process cleanup and
 # fall through to ray-job.sh (source mode) for env setup.
-if [ -n "${RAY_ADDRESS:-}" ] && timeout 5 ray status >/dev/null 2>&1; then
-    echo "=== Detected existing Ray cluster (RAY_ADDRESS=$RAY_ADDRESS); delegating to ray-job.sh ==="
-    # shellcheck source=./ray-job.sh
-    source "${_LOCAL_SH_DIR}/ray-job.sh"
-    return 0 2>/dev/null || exit 0
-fi
+# if [ -n "${RAY_ADDRESS:-}" ] && timeout 5 ray status >/dev/null 2>&1; then
+#     echo "=== Detected existing Ray cluster (RAY_ADDRESS=$RAY_ADDRESS); delegating to ray-job.sh ==="
+#     # shellcheck source=./ray-job.sh
+#     source "${_LOCAL_SH_DIR}/ray-job.sh"
+#     return 0 2>/dev/null || exit 0
+# fi
 
 set -eo pipefail
 
@@ -60,9 +60,19 @@ set -x
 unset MASTER_ADDR 2>/dev/null || true
 export PYTHONUNBUFFERED=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
-export MEGATRON=${MEGATRON:-/root/Megatron-LM/}
+# export MEGATRON=${MEGATRON:-/root/Megatron-LM/}
 export RELAX=${RELAX:-${_LOCAL_SH_DIR}/../../}
-export PYTHONPATH=${RELAX}:$MEGATRON:$RELAX:${PYTHONPATH:-}
+# export PYTHONPATH=${RELAX}:$MEGATRON:$RELAX:${PYTHONPATH:-}
+export MEGATRON=/data1/zhujinlei/qwen38-deps/Megatron-LM
+export MEGATRON_BRIDGE=/data1/zhujinlei/qwen38-deps/Megatron-Bridge/src
+export QWEN38_TRANSFORMERS=/data1/zhujinlei/qwen38-deps/transformers/src
+export TRANSFERQUEUE=/data1/zhujinlei/qwen38-deps/TransferQueue
+export PYTHONPATH=${MEGATRON_BRIDGE}:${MEGATRON}:${QWEN38_TRANSFORMERS}:${TRANSFERQUEUE}:${RELAX}:${PYTHONPATH:-}
+# TE 源码构建依赖 pip 的 CUDA 13 库 (libcublas.so.13 等) + cuDNN, 运行时需加 LD_LIBRARY_PATH
+export CUDA_SDK=/usr/local/cuda-13-sdk
+export LD_LIBRARY_PATH=${CUDA_SDK}/lib64:/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH:-}
+
+
 export MODEL_CONFIG_DIR="${_LOCAL_SH_DIR}/../models"
 
 relax_kernel_cache_configure "${RELAX_RUN_SCRIPT_PATH:-${BASH_SOURCE[1]:-}}" "$@"
@@ -114,6 +124,7 @@ export RUNTIME_ENV_JSON="{
 \"env_vars\": {
    \"PYTHONUNBUFFERED\": \"1\",
    \"PYTHONPATH\": \"${PYTHONPATH}\",
+   \"LD_LIBRARY_PATH\": \"${LD_LIBRARY_PATH}\",
    \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
    \"RAY_OVERRIDE_JOB_RUNTIME_ENV\": \"1\",
    \"OMP_NUM_THREADS\": \"${OMP_NUM_THREADS:-24}\",
@@ -126,6 +137,8 @@ export RUNTIME_ENV_JSON="{
    \"NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME\": \"${NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME:-${NCCL_SOCKET_IFNAME}}\",
    \"NVTE_USE_CUTLASS_GROUPED_GEMM\": \"${NVTE_USE_CUTLASS_GROUPED_GEMM:-0}\",
    \"NVTE_CUTLASS_GROUPED_GEMM_WARN_FALLBACK\": \"${NVTE_CUTLASS_GROUPED_GEMM_WARN_FALLBACK:-1}\",
+   \"SGLANG_NUMA_BIND_V2\": \"${SGLANG_NUMA_BIND_V2:-1}\",
+   \"QWEN48_PLE_CPU_OFFLOAD\": \"${QWEN48_PLE_CPU_OFFLOAD:-0}\",
    \"INDEXER_ROPE_NEOX_STYLE\": \"${INDEXER_ROPE_NEOX_STYLE:-0}\"
 }
 }"

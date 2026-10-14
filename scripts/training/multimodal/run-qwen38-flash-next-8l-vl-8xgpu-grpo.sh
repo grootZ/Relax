@@ -97,9 +97,9 @@ else
     ROLLOUT_MAX_CONTEXT_LEN=1152
     TOKEN_BUDGET=1024
 fi
-TP_SIZE="${TP_SIZE:-$((2 + 2 * STAGE2_RL_GATE))}"
-CP_SIZE="${CP_SIZE:-2}"
-EP_SIZE="${EP_SIZE:-$((2 + 6 * STAGE2_RL_GATE))}"
+TP_SIZE="${TP_SIZE:-8}"
+CP_SIZE="${CP_SIZE:-1}"
+EP_SIZE="${EP_SIZE:-8}"
 if [[ "${STAGE2_RL_GATE}" == 1 && (
     "${TP_SIZE}" != 4 || "${CP_SIZE}" != 2 || "${EP_SIZE}" != 8
 ) ]]; then
@@ -120,14 +120,14 @@ CKPT_ARGS=(
     --ref-load "${MODEL_DIR}/${MODEL_NAME}"
     --megatron-to-hf-mode bridge
 )
-if [[ "${NO_SAVE}" == 0 ]]; then
-    CKPT_ARGS+=(
-        --load "${SAVE_DIR}/${EXP_NAME}"
-        --save "${SAVE_DIR}/${EXP_NAME}"
-        --save-interval "${SAVE_INTERVAL:-2}"
-        --max-actor-ckpt-to-keep "${MAX_ACTOR_CKPT_TO_KEEP:-1}"
-    )
-fi
+# if [[ "${NO_SAVE}" == 0 ]]; then
+#     CKPT_ARGS+=(
+#         --load "${SAVE_DIR}/${EXP_NAME}"
+#         --save "${SAVE_DIR}/${EXP_NAME}"
+#         --save-interval "${SAVE_INTERVAL:-2}"
+#         --max-actor-ckpt-to-keep "${MAX_ACTOR_CKPT_TO_KEEP:-1}"
+#     )
+# fi
 if [ "${OVERRIDE_OPT_PARAM_SCHEDULER:-0}" = "1" ]; then
     CKPT_ARGS+=(--override-opt-param-scheduler)
 fi
@@ -215,12 +215,12 @@ SGLANG_ARGS=(
     --sglang-disable-cuda-graph
 )
 
-TRACKING_ARGS=(
-    --use-clearml
-    --use-metrics-service
-    --tb-project-name "${PROJECT_NAME}"
-    --tb-experiment-name "${EXP_NAME}-${now}"
-)
+# TRACKING_ARGS=(
+#     --use-clearml
+#     --use-metrics-service
+#     --tb-project-name "${PROJECT_NAME}"
+#     --tb-experiment-name "${EXP_NAME}-${now}"
+# )
 
 MISC_ARGS=(
     --bf16

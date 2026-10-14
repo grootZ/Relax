@@ -730,14 +730,9 @@ def _chunk_with_mla_pairing(named_params, chunk_size):
     pending_mla: OrderedDict[str, tuple[str, torch.Tensor]] = OrderedDict()
 
     for name, tensor in named_params:
-        is_mla = any(name.endswith(suffix) for suffix in _MLA_PAIRED_SUFFIXES)
+        layer_key = _fused_pair_key(name)
 
-        if is_mla:
-            for suffix in _MLA_PAIRED_SUFFIXES:
-                if name.endswith(suffix):
-                    layer_key = name[: -len(suffix)]
-                    break
-
+        if layer_key is not None:
             if layer_key in pending_mla:
                 partner_name, partner_tensor = pending_mla.pop(layer_key)
                 pair = [(partner_name, partner_tensor), (name, tensor)]

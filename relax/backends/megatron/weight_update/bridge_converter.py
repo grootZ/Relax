@@ -24,6 +24,21 @@ def _noop_gather_from_ep_ranks(self_m, megatron_weights, megatron_module, hf_par
     return {str(hf_param_name): megatron_weights}
 
 
+def _normalize_global_name(name: str) -> str:
+    """Strip the Megatron wrapper prefix and the virtual-pipeline stage index.
+
+    ``named_params_and_buffers`` yields ``module.module.`` prefixed names, and
+    with virtual pipeline parallelism an extra ``vp_stages.<i>.`` segment. The
+    Bridge mapping registry is keyed on the bare ``global_param_name``.
+    """
+    global_name = strip_param_name_prefix(name)
+    if global_name.startswith("vp_stages."):
+        parts = global_name.split(".", 2)
+        if len(parts) >= 3:
+            global_name = parts[2]
+    return global_name
+
+
 class BridgeConverter:
     """Per-parameter megatron-to-HF conversion using megatron-bridge.
 
@@ -46,6 +61,11 @@ class BridgeConverter:
         self._bridge_mapping_registry: Any = None
         self._bridge_expert_transposes_down: bool = True
         self._configs_broadcast_done: bool = False
+        # Optional set of HF keys from the source checkpoint, used to pick between
+        # equivalent HF aliases when exporting PLE shards. Nothing populates it
+        # today, so `iter_ple_shards` keeps the Bridge-provided name as-is.
+        # TODO(agent): wire this up if a checkpoint ever needs alias remapping.
+        self._hf_alias_checkpoint_keys: Collection[str] | None = None
 
     # ------------------------------------------------------------------
     # Lazy initialisation
@@ -314,11 +334,7 @@ class BridgeConverter:
         """
         self.init_tasks()
 
-        global_name = strip_param_name_prefix(name)
-        if global_name.startswith("vp_stages."):
-            parts = global_name.split(".", 2)
-            if len(parts) >= 3:
-                global_name = parts[2]
+        global_name = _normalize_global_name(name)
 
         global_name, task = self._lookup_task(global_name)
 

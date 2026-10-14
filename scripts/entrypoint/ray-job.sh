@@ -175,9 +175,13 @@ export MASTER_ADDR
 
 export PYTHONUNBUFFERED=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
-export MEGATRON=${MEGATRON:-/root/Megatron-LM/}
+# export MEGATRON=${MEGATRON:-/root/Megatron-LM/}
 export RELAX=${RELAX:-${DIR}/../../}
-export PYTHONPATH=${RELAX}:$MEGATRON:$RELAX:${PYTHONPATH:-}
+# export PYTHONPATH=${RELAX}:$MEGATRON:$RELAX:${PYTHONPATH:-}
+export MEGATRON=/data1/zhujinlei/qwen38-deps/Megatron-LM
+export MEGATRON_BRIDGE=/data1/zhujinlei/qwen38-deps/Megatron-Bridge/src
+export TRANSFERQUEUE=/data1/zhujinlei/qwen38-deps/TransferQueue
+export PYTHONPATH=${MEGATRON_BRIDGE}:${MEGATRON}:${TRANSFERQUEUE}:${RELAX}:${PYTHONPATH:-}
 export MODEL_CONFIG_DIR="${DIR}/../models"
 
 # ── NVLink detection ────────────────────────────────────────────────────────
