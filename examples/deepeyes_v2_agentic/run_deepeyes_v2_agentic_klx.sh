@@ -47,7 +47,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 [ -f "${SCRIPT_DIR}/env.sh" ] && source "${SCRIPT_DIR}/env.sh"
 
 if [ -z "${RELAX_ENTRYPOINT_MODE:-}" ]; then
-    source "${SCRIPT_DIR}/../../scripts/entrypoint/local.sh"
+    source "${SCRIPT_DIR}/../../scripts/entrypoint/local-klx.sh"
 fi
 source "${MODEL_CONFIG_DIR}/qwen36-35B-A3B.sh"
 
