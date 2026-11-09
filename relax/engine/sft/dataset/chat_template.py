@@ -66,7 +66,13 @@ def _to_chat_messages(
     out = []
     for m in sample.messages:
         content = m.content
-        reasoning_content = m.reasoning_content
+        # CanonicalMessage (dataset/sample.py) carries only role/content/learn/
+        # tool_calls -- the `reasoning_content` field this migration assumed was
+        # never added, so a bare attribute read raised AttributeError for every
+        # sample. getattr keeps the Qwen3.8 path below working (it derives
+        # reasoning_content from a leading <think> block) and stays
+        # forward-compatible if the field is introduced later.
+        reasoning_content = getattr(m, "reasoning_content", None)
         if normalize_deepseek_reasoning and m.role == "assistant" and reasoning_content is None:
             reasoning_content, content = split_embedded_thinking(content)
         if normalize_qwen38_reasoning and m.role == "assistant":
@@ -362,6 +368,7 @@ def _render_per_message_fallback(
     apply_chat_template_kwargs: dict | None = None,
     last_turn_only: bool = False,
     ignore_empty_think: bool = False,
+    effective_template: str | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Path 2: single full render + char-level mask projected back through
     `offset_mapping`.
@@ -387,16 +394,25 @@ def _render_per_message_fallback(
     Qwen-style ChatML wrapping — non-ChatML templates should expose
     ``{% generation %}`` markers so Path 1 handles them natively.
     """
-    deepseek_dialect = _select_dialect(effective_template)
+    # TODO(agent): DeepSeek-V4 embedded-thinking is unimplemented, not just
+    # unreachable. Commit 1578ab5 (Qwen3.8 Flash-Next migration) left FOUR
+    # dangling names in this module -- `_select_dialect`, `effective_template`,
+    # `_EMBEDDED_THINK_INDICES_KEY` and `split_embedded_thinking` -- of which
+    # only `effective_template` can be resolved (it is a local of
+    # `render_with_loss_mask`, now threaded in as a parameter). The other three
+    # have never been defined anywhere in this repo's history, so this fallback
+    # raised NameError for every sample that reached it. Pinning the DeepSeek
+    # gate to False keeps `split_embedded_thinking` (line 71) unreachable and
+    # invents no behaviour: no dialect here is named "deepseek_v4", so the
+    # original guard could never have been True either. Wiring the feature up
+    # needs the key constant, the splitter, and a DSv4 template detector.
+    normalize_deepseek_reasoning = False
     qwen38_template = _normalize_qwen38_reasoning(effective_template)
     msgs, extra_kwargs = _prepare_chat_messages(
         sample,
         apply_chat_template_kwargs,
         last_turn_only=last_turn_only,
-        normalize_deepseek_reasoning=(
-            deepseek_dialect.name == "deepseek_v4"
-            and _EMBEDDED_THINK_INDICES_KEY in (apply_chat_template_kwargs or {})
-        ),
+        normalize_deepseek_reasoning=normalize_deepseek_reasoning,
         normalize_qwen38_reasoning=qwen38_template,
     )
     rendered_text = tokenizer.apply_chat_template(msgs, tools=sample.tools, tokenize=False, **extra_kwargs)
@@ -625,7 +641,10 @@ def render_with_loss_mask(
             sample,
             tokenizer=tokenizer,
             apply_chat_template_kwargs=merged,
-            normalize_deepseek_reasoning=_EMBEDDED_THINK_INDICES_KEY in merged,
+            # Unimplemented DeepSeek-V4 gate -- see the TODO in
+            # _render_per_message_fallback; the key constant and
+            # split_embedded_thinking() have never existed.
+            normalize_deepseek_reasoning=False,
             normalize_qwen38_reasoning=_normalize_qwen38_reasoning(effective_template),
             last_turn_only=last_turn_only,
         )
@@ -644,6 +663,7 @@ def render_with_loss_mask(
         apply_chat_template_kwargs=merged,
         last_turn_only=last_turn_only,
         ignore_empty_think=ignore_empty_think,
+        effective_template=effective_template,
     )
 
 
@@ -670,7 +690,10 @@ def render_to_text(
         sample,
         patch_result.kwargs,
         last_turn_only=last_turn_only,
-        normalize_deepseek_reasoning=_EMBEDDED_THINK_INDICES_KEY in patch_result.kwargs,
+        # Unimplemented DeepSeek-V4 gate -- see the TODO in
+        # _render_per_message_fallback; the key constant and
+        # split_embedded_thinking() have never existed.
+        normalize_deepseek_reasoning=False,
         normalize_qwen38_reasoning=_normalize_qwen38_reasoning(patch_result.template),
     )
     return tokenizer.apply_chat_template(
