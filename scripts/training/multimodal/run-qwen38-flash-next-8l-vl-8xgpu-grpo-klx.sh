@@ -19,15 +19,15 @@
 
 set -ex
 set -o pipefail
-export WORKDIR="${WORKDIR:-/data1/zhujinlei/qwen38}"
-export MODEL_DIR=/data1/zhujinlei
-export DATA_DIR=/data1/zhujinlei/lmms-lab/multimodal-open-r1-8k-verified/data
+export WORKDIR="${WORKDIR:-/root/qwen38}"
 export WANDB_API_KEY=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
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export RL_MODEL_TYPE="Qwen38_flash_multimodal"
 export XMLIR_USE_HYDRA_LINEAR=${XMLIR_USE_HYDRA_LINEAR:-1}
 export XMLIR_ENABLE_FAST_FC=${XMLIR_ENABLE_FAST_FC:-1}
 export XMLIR_MEMCPY_RETRY_SYNC=${XMLIR_MEMCPY_RETRY_SYNC:-true}
+export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
+export RELAX_PROPAGATE_ENV_VARS="CUDA_VISIBLE_DEVICES,XPU_VISIBLE_DEVICES,RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"
 
 export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-eth0}
 export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-eth0}
@@ -42,8 +42,8 @@ if [ -z "${RELAX_ENTRYPOINT_MODE:-}" ]; then
 fi
 source "${MODEL_CONFIG_DIR}/qwen38-flash-next-8l.sh"
 
-MODEL_DIR="${MODEL_DIR:-/data1/zhujinlei/models}"
-DATA_DIR="${DATA_DIR:-/data1/zhujinlei/models/lmms-lab/multimodal-open-r1-8k-verified/data}"
+MODEL_DIR="${MODEL_DIR:-/data}"
+DATA_DIR="${DATA_DIR:-/data/lmms-lab/multimodal-open-r1-8k-verified/data}"
 MODEL_NAME="${VL_MODEL_NAME:-Qwen3.8-Flash-Next-8L-VL}"
 PROMPT_DATA="${PROMPT_DATA:-${DATA_DIR}/train-00000-of-00001-converted.parquet}"
 
@@ -212,7 +212,8 @@ EXTRA_ENV_VARS_JSON="\"SGLANG_ENABLE_QWEN4_QSA\": \"1\",
     \"SGLANG_ENABLE_QWEN4_QSA_SPARSE_PREFILL\": \"${SGLANG_ENABLE_QWEN4_QSA_SPARSE_PREFILL:-1}\",
     \"SGLANG_QSA_USE_GATHER_MULTISTREAM\": \"${SGLANG_QSA_USE_GATHER_MULTISTREAM:-0}\",
     \"XSGL_MTP_QUANTIZE\": \"0\",
-    \"XMLIR_ENABLE_FALLBACK_TO_CPU_BOOL\": \"True\""
+    \"XMLIR_ENABLE_FALLBACK_TO_CPU_BOOL\": \"True\",
+    \"RELAX_PROPAGATE_ENV_VARS\": \"${RELAX_PROPAGATE_ENV_VARS}\""
 
 source "${SCRIPT_DIR}/../../entrypoint/runtime-env-klx.sh"
 mkdir -p "${SCRIPT_DIR}/log"
@@ -234,8 +235,3 @@ ray job submit ${RAY_NO_WAIT:+--no-wait} --address="${RAY_ADDRESS:-http://127.0.
     "${SGLANG_ARGS[@]}" \
     "${TRACKING_ARGS[@]}" \
     "${MISC_ARGS[@]}" 2>&1 | tee "${SCRIPT_DIR}/log/${EXP_NAME}-${now}.log"
-
-    # --debug-rollout-only \
-    # --save-debug-rollout-data /data1/zhujinlei/qwen38/rollout_data/{rollout_id}.pt \
-    # --debug-train-only \
-    # --load-debug-rollout-data /data1/zhujinlei/qwen38/rollout_data/{rollout_id}.pt \

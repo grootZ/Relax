@@ -371,6 +371,26 @@ class MegatronTrainRayActor(TrainRayActor):
         periodic predict steps; Megatron stays awake between."""
         return not is_sft_mode(self.args)
 
+    @property
+    def _actor_backup_has_reader(self) -> bool:
+        """Whether anything will read the host-side ``"actor"`` backup.
+
+        It is only ever read by the weight push to rollout
+        (``weights_getter`` in ``UpdateWeightFromTensor`` /
+        ``UpdateWeightFromDistributed``) and by ``_switch_model``'s
+        ``restore``. Pure SFT has neither, so refreshing it every step is a
+        full-model D2H plus a device sync for nobody. Keep this conservative:
+        a stale backup would be restored as real weights.
+        """
+        if self._per_step_rollout or self.args.offload_train:
+            return True
+        if getattr(self, "rollout_manager", None) is not None:
+            return True
+        if getattr(self.args, "sft_predict_interval", None) is not None:
+            return True
+        # ref / teacher / old_actor each add a tag and imply _switch_model use.
+        return len(self.weights_backuper.backup_tags) > 1
+
     def init(
         self,
         args: Namespace,
@@ -1740,7 +1760,7 @@ class MegatronTrainRayActor(TrainRayActor):
             RoutingReplay.clear_all()
 
         # update the cpu actor weight to the latest model
-        if hasattr(self, "weights_backuper"):
+        if hasattr(self, "weights_backuper") and self._actor_backup_has_reader:
             self.weights_backuper.backup("actor")
 
         # Update ref model if needed
