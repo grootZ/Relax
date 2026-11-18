@@ -33,7 +33,10 @@ export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-eth0}
 export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-eth0}
 export TP_SOCKET_IFNAME=${TP_SOCKET_IFNAME:-eth0}
 export BKCL_RDMA_NICS=${BKCL_RDMA_NICS:-bond0,bond1,bond2,bond3,bond4,bond5,bond6,bond7}
+
 unset http_proxy && unset https_proxy
+JOB_HTTP_PROXY="${JOB_HTTP_PROXY:-http://agent.baidu.com:8891}"
+JOB_NO_PROXY="${JOB_NO_PROXY:-localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
 
 now=$(date "+%Y%m%d-%H%M%S")
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
@@ -42,8 +45,8 @@ if [ -z "${RELAX_ENTRYPOINT_MODE:-}" ]; then
 fi
 source "${MODEL_CONFIG_DIR}/qwen38-flash-next-8l.sh"
 
-MODEL_DIR="${MODEL_DIR:-/data}"
-DATA_DIR="${DATA_DIR:-/data/lmms-lab/multimodal-open-r1-8k-verified/data}"
+MODEL_DIR="${MODEL_DIR:-/data1/zhujinlei/}"
+DATA_DIR="${DATA_DIR:-/data1/zhujinlei/lmms-lab/multimodal-open-r1-8k-verified/data}"
 MODEL_NAME="${VL_MODEL_NAME:-Qwen3.8-Flash-Next-8L-VL}"
 PROMPT_DATA="${PROMPT_DATA:-${DATA_DIR}/train-00000-of-00001-converted.parquet}"
 
@@ -208,7 +211,10 @@ MISC_ARGS=(
     --use-health-check
 )
 
-EXTRA_ENV_VARS_JSON="\"SGLANG_ENABLE_QWEN4_QSA\": \"1\",
+EXTRA_ENV_VARS_JSON="\"http_proxy\": \"${JOB_HTTP_PROXY}\",
+    \"https_proxy\": \"${JOB_HTTP_PROXY}\",
+    \"no_proxy\": \"${JOB_NO_PROXY}\",
+    \"SGLANG_ENABLE_QWEN4_QSA\": \"1\",
     \"SGLANG_ENABLE_QWEN4_QSA_SPARSE_PREFILL\": \"${SGLANG_ENABLE_QWEN4_QSA_SPARSE_PREFILL:-1}\",
     \"SGLANG_QSA_USE_GATHER_MULTISTREAM\": \"${SGLANG_QSA_USE_GATHER_MULTISTREAM:-0}\",
     \"XSGL_MTP_QUANTIZE\": \"0\",
